@@ -2,6 +2,7 @@ extends Node3D
 
 # Persistent settings
 const SETTINGS_FILE = "user://settings.cfg"
+const MAX_RECORDING_TIME: float = 20.0
 
 var server_url: String = "192.168.15.71:8080"
 var persona: String = "You are a helpful and polite AI assistant."
@@ -12,6 +13,7 @@ var pseudo_memory: String = ""
 
 # State variables
 var is_recording: bool = false
+var recording_timer: float = 0.0
 var record_effect: AudioEffectRecord = null
 var record_bus_index: int = -1
 var is_vr_mode: bool = false
@@ -73,6 +75,14 @@ func _ready() -> void:
 
 	update_ui_elements()
 
+func _process(delta: float) -> void:
+	if is_recording:
+		recording_timer -= delta
+		red_circle.queue_redraw()
+		if recording_timer <= 0.0:
+			recording_timer = 0.0
+			stop_ptt_recording_and_send()
+
 func setup_audio_record_bus() -> void:
 	record_bus_index = AudioServer.get_bus_index("Record")
 	if record_bus_index == -1:
@@ -95,7 +105,18 @@ func _on_red_circle_draw() -> void:
 	if red_circle.visible:
 		var center = red_circle.size / 2.0
 		var radius = min(center.x, center.y) - 5.0
-		red_circle.draw_circle(center, radius, Color.RED)
+		# Draw solid red circle
+		red_circle.draw_circle(center, radius, Color(0.9, 0.1, 0.1, 0.9))
+
+		# Draw countdown number centered inside red circle
+		var seconds_left = int(ceil(recording_timer))
+		var font = ThemeDB.fallback_font
+		var font_size = 28
+		var text_str = str(seconds_left)
+		var string_size = font.get_string_size(text_str, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size)
+		var text_pos = center + Vector2(-string_size.x / 2.0, string_size.y / 3.0)
+
+		red_circle.draw_string(font, text_pos, text_str, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size, Color.WHITE)
 
 func setup_ui_focus_chain() -> void:
 	ip_line_edit.focus_mode = Control.FOCUS_ALL
@@ -160,6 +181,7 @@ func start_ptt_recording() -> void:
 	if is_recording or not record_effect:
 		return
 	is_recording = true
+	recording_timer = MAX_RECORDING_TIME
 	red_circle.visible = true
 	red_circle.queue_redraw()
 	status_label.text = "Status: Recording Audio..."
@@ -177,27 +199,74 @@ func stop_ptt_recording_and_send() -> void:
 
 	var recording = record_effect.get_recording()
 	if recording:
-		# Save to game/project folder (res://recorded_audio.wav) and user:// folder
-		recording.save_to_wav("res://recorded_audio.wav")
-		recording.save_to_wav("user://recorded_audio.wav")
-
-		var abs_res_path = ProjectSettings.globalize_path("res://recorded_audio.wav")
-		var abs_user_path = ProjectSettings.globalize_path("user://recorded_audio.wav")
-
-		var wav_bytes = FileAccess.get_file_as_bytes("res://recorded_audio.wav")
-		if wav_bytes.size() == 0:
-			wav_bytes = FileAccess.get_file_as_bytes("user://recorded_audio.wav")
-
-		print("Saved WAV to: ", abs_res_path, " (User path: ", abs_user_path, ") Bytes: ", wav_bytes.size())
-
-		if wav_bytes.size() > 44: # Standard WAV header is 44 bytes
-			status_label.text = "Status: Saved " + str(wav_bytes.size()) + " bytes to " + abs_res_path
+		# Process in RAM downsampled to 16kHz Mono 16-bit PCM (no disk writing)
+		var wav_bytes = create_compact_16khz_wav_in_ram(recording)
+		if wav_bytes.size() > 44:
+			status_label.text = "Status: Audio processed in RAM (" + str(wav_bytes.size()) + " bytes)"
 			var base64_audio = Marshalls.raw_to_base64(wav_bytes)
 			send_audio_to_gemma(base64_audio)
 		else:
-			status_label.text = "Status: Error - recorded audio is empty (" + str(wav_bytes.size()) + " bytes)"
+			status_label.text = "Status: Error - recorded audio is empty"
 	else:
 		status_label.text = "Status: No audio recorded"
+
+# Pure In-RAM Audio Processing: Downsamples AudioStreamWAV to 16kHz 16-bit Mono PCM RIFF WAV
+func create_compact_16khz_wav_in_ram(sample: AudioStreamWAV) -> PackedByteArray:
+	var raw_data = sample.data
+	if raw_data.size() == 0:
+		return PackedByteArray()
+
+	var orig_mix_rate = sample.mix_rate
+	if orig_mix_rate <= 0:
+		orig_mix_rate = 44100
+
+	var is_stereo = sample.stereo
+	var target_mix_rate = 16000
+	var step = float(orig_mix_rate) / float(target_mix_rate)
+
+	var pcm_16_mono = PackedByteArray()
+
+	# Process 16-bit PCM input data into 16kHz mono samples in RAM
+	var num_samples = raw_data.size() / (4 if is_stereo else 2)
+	var i: float = 0.0
+
+	while i < num_samples:
+		var idx = int(i)
+		var byte_offset = idx * (4 if is_stereo else 2)
+		if byte_offset + 1 < raw_data.size():
+			var sample_val = raw_data.decode_s16(byte_offset)
+			var offset_end = pcm_16_mono.size()
+			pcm_16_mono.resize(offset_end + 2)
+			pcm_16_mono.encode_s16(offset_end, sample_val)
+		i += step
+
+	var data_size = pcm_16_mono.size()
+	var total_file_size = data_size + 36
+
+	# Build 44-byte RIFF WAV Header in RAM
+	var header = PackedByteArray()
+	header.resize(44)
+
+	# "RIFF"
+	header[0] = 82; header[1] = 73; header[2] = 70; header[3] = 70
+	header.encode_s32(4, total_file_size)
+	# "WAVE"
+	header[8] = 87; header[9] = 65; header[10] = 86; header[11] = 69
+	# "fmt "
+	header[12] = 102; header[13] = 109; header[14] = 116; header[15] = 32
+	header.encode_s32(16, 16) # Subchunk1Size (16 for PCM)
+	header.encode_s16(20, 1)  # AudioFormat (1 for PCM)
+	header.encode_s16(22, 1)  # NumChannels (1 for Mono)
+	header.encode_s32(24, target_mix_rate) # SampleRate (16000 Hz)
+	header.encode_s32(28, target_mix_rate * 2) # ByteRate (16000 * 1 * 2)
+	header.encode_s16(32, 2)  # BlockAlign (1 * 2 bytes)
+	header.encode_s16(34, 16) # BitsPerSample (16 bits)
+	# "data"
+	header[36] = 100; header[37] = 97; header[38] = 116; header[39] = 97
+	header.encode_s32(40, data_size)
+
+	header.append_array(pcm_16_mono)
+	return header
 
 func send_audio_to_gemma(base64_audio: String) -> void:
 	status_label.text = "Status: Sending to Gemma..."
