@@ -79,7 +79,11 @@ func setup_audio_record_bus() -> void:
 		AudioServer.add_bus()
 		record_bus_index = AudioServer.get_bus_count() - 1
 		AudioServer.set_bus_name(record_bus_index, "Record")
-		AudioServer.set_bus_mute(record_bus_index, true)
+
+	# Important: Bus must NOT be muted for AudioEffectRecord to capture audio in Godot!
+	# We lower the volume to -80 dB to avoid output feedback through speakers.
+	AudioServer.set_bus_mute(record_bus_index, false)
+	AudioServer.set_bus_volume_db(record_bus_index, -80.0)
 
 	if AudioServer.get_bus_effect_count(record_bus_index) == 0:
 		var effect = AudioEffectRecord.new()
@@ -137,7 +141,6 @@ func _unhandled_input(event: InputEvent) -> void:
 func _input(event: InputEvent) -> void:
 	# Check spacebar / PTT event if not handled or when UI controls have focus
 	if event.is_action_pressed("ptt") and not is_recording:
-		# If spacebar pressed while LineEdit or Button focused, handle PTT if key is space
 		if event is InputEventKey and event.keycode == KEY_SPACE:
 			var focused = get_viewport().gui_get_focus_owner()
 			if focused is LineEdit or focused is TextEdit:
@@ -170,6 +173,8 @@ func stop_ptt_recording_and_send() -> void:
 	is_recording = false
 	red_circle.visible = false
 	record_effect.set_recording_active(false)
+	if audio_stream_record.playing:
+		audio_stream_record.stop()
 	status_label.text = "Status: Processing Audio..."
 
 	var recording = record_effect.get_recording()
