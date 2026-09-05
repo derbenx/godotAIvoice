@@ -177,13 +177,25 @@ func stop_ptt_recording_and_send() -> void:
 
 	var recording = record_effect.get_recording()
 	if recording:
-		recording.save_to_wav("user://temp_recording.wav")
-		var wav_bytes = FileAccess.get_file_as_bytes("user://temp_recording.wav")
+		# Save to game/project folder (res://recorded_audio.wav) and user:// folder
+		recording.save_to_wav("res://recorded_audio.wav")
+		recording.save_to_wav("user://recorded_audio.wav")
+
+		var abs_res_path = ProjectSettings.globalize_path("res://recorded_audio.wav")
+		var abs_user_path = ProjectSettings.globalize_path("user://recorded_audio.wav")
+
+		var wav_bytes = FileAccess.get_file_as_bytes("res://recorded_audio.wav")
+		if wav_bytes.size() == 0:
+			wav_bytes = FileAccess.get_file_as_bytes("user://recorded_audio.wav")
+
+		print("Saved WAV to: ", abs_res_path, " (User path: ", abs_user_path, ") Bytes: ", wav_bytes.size())
+
 		if wav_bytes.size() > 44: # Standard WAV header is 44 bytes
+			status_label.text = "Status: Saved " + str(wav_bytes.size()) + " bytes to " + abs_res_path
 			var base64_audio = Marshalls.raw_to_base64(wav_bytes)
 			send_audio_to_gemma(base64_audio)
 		else:
-			status_label.text = "Status: Error - recorded audio is empty"
+			status_label.text = "Status: Error - recorded audio is empty (" + str(wav_bytes.size()) + " bytes)"
 	else:
 		status_label.text = "Status: No audio recorded"
 
@@ -323,7 +335,6 @@ func format_http_url(ip_port_or_url: String, default_endpoint: String) -> String
 		clean = "http://" + clean
 	if clean.ends_with("/"):
 		clean = clean.substr(0, clean.length() - 1)
-	# If user provided a full path (like http://192.168.15.71:8080/v1/chat/completions), use it directly
 	if clean.contains("/v1/") or clean.contains("/completion") or clean.contains("/speech"):
 		return clean
 	return clean + default_endpoint
