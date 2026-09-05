@@ -2,10 +2,11 @@ extends Node3D
 
 # Persistent settings
 const SETTINGS_FILE = "user://settings.cfg"
+const MIN_RECORDING_TIME: float = 2.0
 const MAX_RECORDING_TIME: float = 20.0
 
 var server_url: String = "192.168.15.71:8080"
-var persona: String = "You are a helpful and polite AI assistant."
+var persona: String = "You are a helpful and polite AI assistant. The user speaks to you using audio voice commands."
 var selected_mic: String = ""
 
 # In-memory session summary (not saved persistently)
@@ -13,7 +14,9 @@ var pseudo_memory: String = ""
 
 # State variables
 var is_recording: bool = false
+var pending_stop: bool = false
 var recording_timer: float = 0.0
+var elapsed_recording_time: float = 0.0
 var record_effect: AudioEffectRecord = null
 var record_bus_index: int = -1
 var is_vr_mode: bool = false
@@ -40,6 +43,8 @@ func _ready() -> void:
 	# Assign AudioStreamMicrophone to record audio input
 	if audio_stream_record:
 		audio_stream_record.stream = AudioStreamMicrophone.new()
+		# Start audio stream player immediately so microphone input remains continuously active
+		audio_stream_record.play()
 
 	# Initialize OpenXR if available
 	var xr_interface = XRServer.find_interface("OpenXR")
@@ -78,8 +83,11 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if is_recording:
 		recording_timer -= delta
+		elapsed_recording_time += delta
 		red_circle.queue_redraw()
-		if recording_timer <= 0.0:
+
+		# Check 20s maximum limit or pending stop after reaching 2s minimum
+		if recording_timer <= 0.0 or (pending_stop and elapsed_recording_time >= MIN_RECORDING_TIME):
 			recording_timer = 0.0
 			stop_ptt_recording_and_send()
 
@@ -105,10 +113,8 @@ func _on_red_circle_draw() -> void:
 	if red_circle.visible:
 		var center = red_circle.size / 2.0
 		var radius = min(center.x, center.y) - 5.0
-		# Draw solid red circle
 		red_circle.draw_circle(center, radius, Color(0.9, 0.1, 0.1, 0.9))
 
-		# Draw countdown number centered inside red circle
 		var seconds_left = int(ceil(recording_timer))
 		var font = ThemeDB.fallback_font
 		var font_size = 28
@@ -157,7 +163,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ptt"):
 		start_ptt_recording()
 	elif event.is_action_released("ptt"):
-		stop_ptt_recording_and_send()
+		on_ptt_released()
 
 func _input(event: InputEvent) -> void:
 	# Check spacebar / PTT event if not handled or when UI controls have focus
@@ -168,7 +174,7 @@ func _input(event: InputEvent) -> void:
 				return # Don't record when typing text into LineEdit/TextEdit
 			start_ptt_recording()
 	elif event.is_action_released("ptt") and is_recording:
-		stop_ptt_recording_and_send()
+		on_ptt_released()
 
 func position_vr_menu_if_needed() -> void:
 	if is_vr_mode and xr_camera:
@@ -181,28 +187,47 @@ func start_ptt_recording() -> void:
 	if is_recording or not record_effect:
 		return
 	is_recording = true
+	pending_stop = false
 	recording_timer = MAX_RECORDING_TIME
+	elapsed_recording_time = 0.0
 	red_circle.visible = true
 	red_circle.queue_redraw()
 	status_label.text = "Status: Recording Audio..."
-	record_effect.set_recording_active(true)
+
+	# Ensure microphone stream player is playing
 	if not audio_stream_record.playing:
 		audio_stream_record.play()
+
+	# Clear any previous buffer and activate recording effect cleanly
+	record_effect.set_recording_active(false)
+	record_effect.set_recording_active(true)
+
+func on_ptt_released() -> void:
+	if not is_recording:
+		return
+
+	# If minimum 2 seconds recording time reached, stop immediately.
+	# Otherwise mark pending_stop to finish when 2.0s is reached in _process.
+	if elapsed_recording_time >= MIN_RECORDING_TIME:
+		stop_ptt_recording_and_send()
+	else:
+		pending_stop = true
+		status_label.text = "Status: Completing minimum 2s recording..."
 
 func stop_ptt_recording_and_send() -> void:
 	if not is_recording or not record_effect:
 		return
 	is_recording = false
+	pending_stop = false
 	red_circle.visible = false
 	record_effect.set_recording_active(false)
 	status_label.text = "Status: Processing Audio..."
 
 	var recording = record_effect.get_recording()
 	if recording:
-		# Process in RAM downsampled to 16kHz Mono 16-bit PCM (no disk writing)
 		var wav_bytes = create_compact_16khz_wav_in_ram(recording)
 		if wav_bytes.size() > 44:
-			status_label.text = "Status: Audio processed in RAM (" + str(wav_bytes.size()) + " bytes)"
+			status_label.text = "Status: Audio processed (" + str(wav_bytes.size()) + " bytes)"
 			var base64_audio = Marshalls.raw_to_base64(wav_bytes)
 			send_audio_to_gemma(base64_audio)
 		else:
@@ -226,7 +251,6 @@ func create_compact_16khz_wav_in_ram(sample: AudioStreamWAV) -> PackedByteArray:
 
 	var pcm_16_mono = PackedByteArray()
 
-	# Process 16-bit PCM input data into 16kHz mono samples in RAM
 	var num_samples = raw_data.size() / (4 if is_stereo else 2)
 	var i: float = 0.0
 
@@ -243,7 +267,6 @@ func create_compact_16khz_wav_in_ram(sample: AudioStreamWAV) -> PackedByteArray:
 	var data_size = pcm_16_mono.size()
 	var total_file_size = data_size + 36
 
-	# Build 44-byte RIFF WAV Header in RAM
 	var header = PackedByteArray()
 	header.resize(44)
 
@@ -254,12 +277,12 @@ func create_compact_16khz_wav_in_ram(sample: AudioStreamWAV) -> PackedByteArray:
 	header[8] = 87; header[9] = 65; header[10] = 86; header[11] = 69
 	# "fmt "
 	header[12] = 102; header[13] = 109; header[14] = 116; header[15] = 32
-	header.encode_s32(16, 16) # Subchunk1Size (16 for PCM)
-	header.encode_s16(20, 1)  # AudioFormat (1 for PCM)
-	header.encode_s16(22, 1)  # NumChannels (1 for Mono)
+	header.encode_s32(16, 16) # Subchunk1Size
+	header.encode_s16(20, 1)  # AudioFormat (PCM)
+	header.encode_s16(22, 1)  # NumChannels (Mono)
 	header.encode_s32(24, target_mix_rate) # SampleRate (16000 Hz)
-	header.encode_s32(28, target_mix_rate * 2) # ByteRate (16000 * 1 * 2)
-	header.encode_s16(32, 2)  # BlockAlign (1 * 2 bytes)
+	header.encode_s32(28, target_mix_rate * 2) # ByteRate
+	header.encode_s16(32, 2)  # BlockAlign
 	header.encode_s16(34, 16) # BitsPerSample (16 bits)
 	# "data"
 	header[36] = 100; header[37] = 97; header[38] = 116; header[39] = 97
@@ -275,7 +298,7 @@ func send_audio_to_gemma(base64_audio: String) -> void:
 	var url = format_http_url(server_url, "/v1/chat/completions")
 	var headers = ["Content-Type: application/json"]
 
-	var system_content = persona
+	var system_content = persona + "\n\nCRITICAL INSTRUCTION: The user's input is provided directly as audio in the 'input_audio' field. Listen to the audio and respond to what the user said."
 	if pseudo_memory.strip_edges() != "":
 		system_content += "\n\nPrevious Conversation Pseudo-Memory:\n" + pseudo_memory
 
@@ -297,7 +320,7 @@ func send_audio_to_gemma(base64_audio: String) -> void:
 					},
 					{
 						"type": "text",
-						"text": "Listen to the provided voice command audio carefully and respond to it."
+						"text": "Attached is my spoken audio voice command. Please answer my audio question directly."
 					}
 				]
 			}
