@@ -4,6 +4,7 @@ extends Node3D
 const SETTINGS_FILE = "user://settings.cfg"
 const MIN_RECORDING_TIME: float = 2.0
 const MAX_RECORDING_TIME: float = 20.0
+const SILENCE_THRESHOLD: float = 10.0 # RMS threshold for detecting silent audio
 
 var server_url: String = "192.168.15.71:8080"
 var persona: String = "You are a helpful and polite AI assistant. The user speaks to you using audio voice commands."
@@ -20,6 +21,7 @@ var elapsed_recording_time: float = 0.0
 var record_effect: AudioEffectRecord = null
 var record_bus_index: int = -1
 var is_vr_mode: bool = false
+var turn_count: int = 0
 
 # UI Node references
 @onready var xr_origin: XROrigin3D = $XROrigin3D
@@ -40,12 +42,6 @@ var is_vr_mode: bool = false
 @onready var vr_menu_3d: Node3D = $VRMenu3D
 
 func _ready() -> void:
-	# Assign AudioStreamMicrophone to record audio input
-	if audio_stream_record:
-		audio_stream_record.stream = AudioStreamMicrophone.new()
-		# Start audio stream player immediately so microphone input remains continuously active
-		audio_stream_record.play()
-
 	# Initialize OpenXR if available
 	var xr_interface = XRServer.find_interface("OpenXR")
 	if xr_interface and xr_interface.is_initialized():
@@ -55,7 +51,7 @@ func _ready() -> void:
 	else:
 		print("OpenXR not initialized. Falling back to PC mode.")
 
-	# Setup Audio Recording Bus & Effect dynamically if missing
+	# Setup Audio Recording Bus
 	setup_audio_record_bus()
 
 	# Populate Microphones
@@ -102,12 +98,6 @@ func setup_audio_record_bus() -> void:
 	AudioServer.set_bus_mute(record_bus_index, false)
 	# Set volume to -80.0 dB to prevent audio feedback through speakers
 	AudioServer.set_bus_volume_db(record_bus_index, -80.0)
-
-	if AudioServer.get_bus_effect_count(record_bus_index) == 0:
-		var effect = AudioEffectRecord.new()
-		AudioServer.add_bus_effect(record_bus_index, effect)
-
-	record_effect = AudioServer.get_bus_effect(record_bus_index, 0) as AudioEffectRecord
 
 func _on_red_circle_draw() -> void:
 	if red_circle.visible:
@@ -184,35 +174,41 @@ func position_vr_menu_if_needed() -> void:
 		vr_menu_3d.rotate_y(PI)
 
 func start_ptt_recording() -> void:
-	if is_recording or not record_effect:
+	if is_recording:
 		return
 	is_recording = true
 	pending_stop = false
 	recording_timer = MAX_RECORDING_TIME
 	elapsed_recording_time = 0.0
+	turn_count += 1
 	red_circle.visible = true
 	red_circle.queue_redraw()
-	status_label.text = "Status: Recording Audio..."
+	status_label.text = "Status: Turn " + str(turn_count) + " - Recording Audio..."
 
-	# Ensure microphone stream player is playing
-	if not audio_stream_record.playing:
-		audio_stream_record.play()
+	# Completely refresh AudioStreamPlayer & AudioStreamMicrophone
+	if audio_stream_record.playing:
+		audio_stream_record.stop()
+	audio_stream_record.stream = AudioStreamMicrophone.new()
 
-	# Clear any previous buffer and activate recording effect cleanly
-	record_effect.set_recording_active(false)
+	# Re-create a fresh AudioEffectRecord instance for this turn
+	while AudioServer.get_bus_effect_count(record_bus_index) > 0:
+		AudioServer.remove_bus_effect(record_bus_index, 0)
+
+	record_effect = AudioEffectRecord.new()
+	AudioServer.add_bus_effect(record_bus_index, record_effect)
+
+	audio_stream_record.play()
 	record_effect.set_recording_active(true)
 
 func on_ptt_released() -> void:
 	if not is_recording:
 		return
 
-	# If minimum 2 seconds recording time reached, stop immediately.
-	# Otherwise mark pending_stop to finish when 2.0s is reached in _process.
 	if elapsed_recording_time >= MIN_RECORDING_TIME:
 		stop_ptt_recording_and_send()
 	else:
 		pending_stop = true
-		status_label.text = "Status: Completing minimum 2s recording..."
+		status_label.text = "Status: Turn " + str(turn_count) + " - Completing min 2s recording..."
 
 func stop_ptt_recording_and_send() -> void:
 	if not is_recording or not record_effect:
@@ -221,19 +217,50 @@ func stop_ptt_recording_and_send() -> void:
 	pending_stop = false
 	red_circle.visible = false
 	record_effect.set_recording_active(false)
-	status_label.text = "Status: Processing Audio..."
+
+	if audio_stream_record.playing:
+		audio_stream_record.stop()
+
+	status_label.text = "Status: Turn " + str(turn_count) + " - Checking Audio..."
 
 	var recording = record_effect.get_recording()
-	if recording:
-		var wav_bytes = create_compact_16khz_wav_in_ram(recording)
-		if wav_bytes.size() > 44:
-			status_label.text = "Status: Audio processed (" + str(wav_bytes.size()) + " bytes)"
-			var base64_audio = Marshalls.raw_to_base64(wav_bytes)
-			send_audio_to_gemma(base64_audio)
-		else:
-			status_label.text = "Status: Error - recorded audio is empty"
+	if not recording:
+		status_label.text = "Status: Turn " + str(turn_count) + " - Error: Null audio recording object"
+		ai_response_label.text = "No audio object captured from microphone."
+		return
+
+	if not recording.data or recording.data.size() == 0:
+		status_label.text = "Status: Turn " + str(turn_count) + " - Error: Empty audio data buffer"
+		ai_response_label.text = "Microphone buffer is empty."
+		return
+
+	var max_amplitude = calculate_max_amplitude(recording.data)
+	print("Captured recording data size: ", recording.data.size(), " bytes | Max amplitude: ", max_amplitude)
+
+	if max_amplitude < SILENCE_THRESHOLD:
+		status_label.text = "Status: Turn " + str(turn_count) + " - Silent audio detected (Amp: " + str(int(max_amplitude)) + ")"
+		ai_response_label.text = "Audio recording was silent or null. Please check your microphone selection."
+		return
+
+	var wav_bytes = create_compact_16khz_wav_in_ram(recording)
+	if wav_bytes.size() > 44:
+		status_label.text = "Status: Turn " + str(turn_count) + " - Audio valid (" + str(wav_bytes.size()) + " bytes, Amp: " + str(int(max_amplitude)) + ")"
+		var base64_audio = Marshalls.raw_to_base64(wav_bytes)
+		send_audio_to_gemma(base64_audio)
 	else:
-		status_label.text = "Status: No audio recorded"
+		status_label.text = "Status: Turn " + str(turn_count) + " - Error: Invalid WAV header/data"
+
+# Returns peak amplitude to detect silent / null audio
+func calculate_max_amplitude(raw_bytes: PackedByteArray) -> float:
+	var peak: float = 0.0
+	var sample_count = raw_bytes.size() / 2
+	for i in range(0, sample_count, 10): # Sample every 10th 16-bit PCM sample for speed
+		var byte_offset = i * 2
+		if byte_offset + 1 < raw_bytes.size():
+			var val = abs(raw_bytes.decode_s16(byte_offset))
+			if val > peak:
+				peak = val
+	return peak
 
 # Pure In-RAM Audio Processing: Downsamples AudioStreamWAV to 16kHz 16-bit Mono PCM RIFF WAV
 func create_compact_16khz_wav_in_ram(sample: AudioStreamWAV) -> PackedByteArray:
@@ -292,13 +319,13 @@ func create_compact_16khz_wav_in_ram(sample: AudioStreamWAV) -> PackedByteArray:
 	return header
 
 func send_audio_to_gemma(base64_audio: String) -> void:
-	status_label.text = "Status: Sending to Gemma..."
+	status_label.text = "Status: Turn " + str(turn_count) + " - Sending to Gemma..."
 	ai_response_label.text = "Thinking..."
 
 	var url = format_http_url(server_url, "/v1/chat/completions")
 	var headers = ["Content-Type: application/json"]
 
-	var system_content = persona + "\n\nCRITICAL INSTRUCTION: The user's input is provided directly as audio in the 'input_audio' field. Listen to the audio and respond to what the user said."
+	var system_content = persona + "\n\nCRITICAL INSTRUCTION: The user's message always contains new spoken audio in the 'input_audio' field. Listen to the audio and reply directly."
 	if pseudo_memory.strip_edges() != "":
 		system_content += "\n\nPrevious Conversation Pseudo-Memory:\n" + pseudo_memory
 
@@ -320,7 +347,7 @@ func send_audio_to_gemma(base64_audio: String) -> void:
 					},
 					{
 						"type": "text",
-						"text": "Attached is my spoken audio voice command. Please answer my audio question directly."
+						"text": "Here is my audio voice command for turn " + str(turn_count) + ". Please answer my question."
 					}
 				]
 			}
@@ -330,7 +357,7 @@ func send_audio_to_gemma(base64_audio: String) -> void:
 	var json_body = JSON.stringify(payload)
 	var err = http_request.request(url, headers, HTTPClient.METHOD_POST, json_body)
 	if err != OK:
-		status_label.text = "Status: Request failed to send (" + str(err) + ")"
+		status_label.text = "Status: Request failed (" + str(err) + ")"
 		ai_response_label.text = "Failed to connect to " + url
 
 func _on_test_connection_pressed() -> void:
@@ -379,7 +406,7 @@ func _on_http_request_completed(result: int, response_code: int, _headers: Packe
 				reply_text = choice["message"]["content"]
 
 		if reply_text != "":
-			status_label.text = "Status: Response received"
+			status_label.text = "Status: Turn " + str(turn_count) + " - Response received"
 			ai_response_label.text = reply_text
 			speak_tts(reply_text)
 			update_pseudo_memory(reply_text)
@@ -405,6 +432,7 @@ func update_pseudo_memory(latest_reply: String) -> void:
 func _on_clear_memory_pressed() -> void:
 	pseudo_memory = ""
 	memory_text_edit.text = ""
+	turn_count = 0
 	status_label.text = "Status: Pseudo-Memory Cleared"
 
 func _on_mic_selected(index: int) -> void:
