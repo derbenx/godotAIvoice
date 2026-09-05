@@ -198,9 +198,6 @@ func send_audio_to_gemma(base64_audio: String) -> void:
 	if pseudo_memory.strip_edges() != "":
 		system_content += "\n\nPrevious Conversation Pseudo-Memory:\n" + pseudo_memory
 
-	# Format with both standard audio input structures for maximum compatibility with llama.cpp / Gemma multimodal servers
-	var data_uri = "data:audio/wav;base64," + base64_audio
-
 	var payload = {
 		"messages": [
 			{
@@ -218,14 +215,8 @@ func send_audio_to_gemma(base64_audio: String) -> void:
 						}
 					},
 					{
-						"type": "audio_url",
-						"audio_url": {
-							"url": data_uri
-						}
-					},
-					{
 						"type": "text",
-						"text": "Listen to the provided voice command audio carefully and respond to it directly."
+						"text": "Listen to the provided voice command audio carefully and respond to it."
 					}
 				]
 			}
@@ -263,8 +254,13 @@ func _on_test_connection_pressed() -> void:
 
 func _on_http_request_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
+		var err_msg = body.get_string_from_utf8()
 		status_label.text = "Status: HTTP Error " + str(response_code)
-		ai_response_label.text = "Error received from server: HTTP " + str(response_code)
+		if err_msg != "":
+			print("HTTP Error Response: ", err_msg)
+			ai_response_label.text = "Error " + str(response_code) + ": " + err_msg
+		else:
+			ai_response_label.text = "Error received from server: HTTP " + str(response_code)
 		return
 
 	var json = JSON.new()
@@ -321,13 +317,16 @@ func _on_persona_changed() -> void:
 	persona = persona_text_edit.text
 	save_settings()
 
-func format_http_url(ip_port: String, endpoint: String) -> String:
-	var clean = ip_port.strip_edges()
+func format_http_url(ip_port_or_url: String, default_endpoint: String) -> String:
+	var clean = ip_port_or_url.strip_edges()
 	if not clean.begins_with("http://") and not clean.begins_with("https://"):
 		clean = "http://" + clean
 	if clean.ends_with("/"):
 		clean = clean.substr(0, clean.length() - 1)
-	return clean + endpoint
+	# If user provided a full path (like http://192.168.15.71:8080/v1/chat/completions), use it directly
+	if clean.contains("/v1/") or clean.contains("/completion") or clean.contains("/speech"):
+		return clean
+	return clean + default_endpoint
 
 func save_settings() -> void:
 	var config = ConfigFile.new()
