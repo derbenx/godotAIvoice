@@ -48,10 +48,8 @@ func _ready() -> void:
 	else:
 		print("OpenXR not initialized. Falling back to PC mode.")
 
-	# Setup Audio Recording Effect
-	record_bus_index = AudioServer.get_bus_index("Record")
-	if record_bus_index != -1:
-		record_effect = AudioServer.get_bus_effect(record_bus_index, 0) as AudioEffectRecord
+	# Setup Audio Recording Bus & Effect dynamically if missing
+	setup_audio_record_bus()
 
 	# Populate Microphones
 	setup_microphone_list()
@@ -74,6 +72,20 @@ func _ready() -> void:
 	setup_ui_focus_chain()
 
 	update_ui_elements()
+
+func setup_audio_record_bus() -> void:
+	record_bus_index = AudioServer.get_bus_index("Record")
+	if record_bus_index == -1:
+		AudioServer.add_bus()
+		record_bus_index = AudioServer.get_bus_count() - 1
+		AudioServer.set_bus_name(record_bus_index, "Record")
+		AudioServer.set_bus_mute(record_bus_index, true)
+
+	if AudioServer.get_bus_effect_count(record_bus_index) == 0:
+		var effect = AudioEffectRecord.new()
+		AudioServer.add_bus_effect(record_bus_index, effect)
+
+	record_effect = AudioServer.get_bus_effect(record_bus_index, 0) as AudioEffectRecord
 
 func _on_red_circle_draw() -> void:
 	if red_circle.visible:
@@ -108,7 +120,7 @@ func setup_microphone_list() -> void:
 		if dev_name == AudioServer.get_input_device():
 			mic_option_button.select(i)
 
-func _input(event: InputEvent) -> void:
+func _unhandled_input(event: InputEvent) -> void:
 	# Toggle Menu
 	if event.is_action_pressed("toggle_menu"):
 		menu_panel.visible = !menu_panel.visible
@@ -120,6 +132,18 @@ func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("ptt"):
 		start_ptt_recording()
 	elif event.is_action_released("ptt"):
+		stop_ptt_recording_and_send()
+
+func _input(event: InputEvent) -> void:
+	# Check spacebar / PTT event if not handled or when UI controls have focus
+	if event.is_action_pressed("ptt") and not is_recording:
+		# If spacebar pressed while LineEdit or Button focused, handle PTT if key is space
+		if event is InputEventKey and event.keycode == KEY_SPACE:
+			var focused = get_viewport().gui_get_focus_owner()
+			if focused is LineEdit or focused is TextEdit:
+				return # Don't record when typing text into LineEdit/TextEdit
+			start_ptt_recording()
+	elif event.is_action_released("ptt") and is_recording:
 		stop_ptt_recording_and_send()
 
 func position_vr_menu_if_needed() -> void:
@@ -225,7 +249,7 @@ func _on_test_connection_pressed() -> void:
 	if err != OK:
 		status_label.text = "Status: Test request failed (" + str(err) + ")"
 
-func _on_http_request_completed(result: int, response_code: int, headers: PackedStringArray, body: PackedByteArray) -> void:
+func _on_http_request_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
 		status_label.text = "Status: HTTP Error " + str(response_code)
 		ai_response_label.text = "Error received from server: HTTP " + str(response_code)
