@@ -1,0 +1,165 @@
+[gd_scene load_steps=5 format=3 uid="uid://cmainscene001"]
+
+[ext_resource type="Script" path="res://main.gd" id="1_script"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_1"]
+sky_top_color = Color(0.2, 0.4, 0.7, 1)
+sky_horizon_color = Color(0.6, 0.7, 0.8, 1)
+
+[sub_resource type="Sky" id="Sky_1"]
+sky_material = SubResource("ProceduralSkyMaterial_1")
+
+[sub_resource type="Environment" id="Environment_1"]
+background_mode = 2
+sky = SubResource("Sky_1")
+
+[node name="Main" type="Node3D"]
+script = ExtResource("1_script")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_1")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.8, -0.5, 0.3, 0, 0.5, 0.866, -0.6, -0.693, 0.4, 0, 5, 0)
+
+[node name="XROrigin3D" type="XROrigin3D" parent="."]
+
+[node name="XRCamera3D" type="XRCamera3D" parent="XROrigin3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.7, 0)
+
+[node name="LeftHand" type="XRController3D" parent="XROrigin3D"]
+tracker = &"left_hand"
+
+[node name="RightHand" type="XRController3D" parent="XROrigin3D"]
+tracker = &"right_hand"
+
+[node name="AudioStreamRecord" type="AudioStreamPlayer" parent="."]
+bus = &"Record"
+
+[node name="CanvasLayer" type="CanvasLayer" parent="."]
+
+[node name="HUD" type="Control" parent="CanvasLayer"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="RedCircle" type="Control" parent="CanvasLayer/HUD"]
+visible = false
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -100.0
+offset_top = 20.0
+offset_right = -20.0
+offset_bottom = 100.0
+grow_horizontal = 0
+
+[node name="AIResponseLabel" type="Label" parent="CanvasLayer/HUD"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -120.0
+offset_bottom = -20.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_font_sizes/font_size = 20
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 2
+
+[node name="MenuPanel" type="PanelContainer" parent="CanvasLayer/HUD"]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -300.0
+offset_top = -250.0
+offset_right = 300.0
+offset_bottom = 250.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBox" type="VBoxContainer" parent="CanvasLayer/HUD/MenuPanel"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Title" type="Label" parent="CanvasLayer/HUD/MenuPanel/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "AI Voice Settings"
+horizontal_alignment = 1
+
+[node name="StatusLabel" type="Label" parent="CanvasLayer/HUD/MenuPanel/VBox"]
+layout_mode = 2
+text = "Status: Idle"
+horizontal_alignment = 1
+
+[node name="IPHBox" type="HBoxContainer" parent="CanvasLayer/HUD/MenuPanel/VBox"]
+layout_mode = 2
+
+[node name="IPLabel" type="Label" parent="CanvasLayer/HUD/MenuPanel/VBox/IPHBox"]
+layout_mode = 2
+text = "Server IP:Port: "
+
+[node name="IPLineEdit" type="LineEdit" parent="CanvasLayer/HUD/MenuPanel/VBox/IPHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "192.168.15.71:8080"
+
+[node name="TestConnectionButton" type="Button" parent="CanvasLayer/HUD/MenuPanel/VBox/IPHBox"]
+layout_mode = 2
+text = "Test Connection"
+
+[node name="MicHBox" type="HBoxContainer" parent="CanvasLayer/HUD/MenuPanel/VBox"]
+layout_mode = 2
+
+[node name="MicLabel" type="Label" parent="CanvasLayer/HUD/MenuPanel/VBox/MicHBox"]
+layout_mode = 2
+text = "Microphone: "
+
+[node name="MicOptionButton" type="OptionButton" parent="CanvasLayer/HUD/MenuPanel/VBox/MicHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="PersonaLabel" type="Label" parent="CanvasLayer/HUD/MenuPanel/VBox"]
+layout_mode = 2
+text = "Persona Description:"
+
+[node name="PersonaTextEdit" type="TextEdit" parent="CanvasLayer/HUD/MenuPanel/VBox"]
+custom_minimum_size = Vector2(0, 80)
+layout_mode = 2
+text = "You are a helpful and polite AI assistant."
+autowrap_mode = 2
+
+[node name="MemoryLabel" type="Label" parent="CanvasLayer/HUD/MenuPanel/VBox"]
+layout_mode = 2
+text = "Pseudo-Memory (Session):"
+
+[node name="MemoryTextEdit" type="TextEdit" parent="CanvasLayer/HUD/MenuPanel/VBox"]
+custom_minimum_size = Vector2(0, 80)
+layout_mode = 2
+editable = false
+autowrap_mode = 2
+
+[node name="ClearMemoryButton" type="Button" parent="CanvasLayer/HUD/MenuPanel/VBox"]
+layout_mode = 2
+text = "Clear Memory"
+
+[node name="HTTPRequest" type="HTTPRequest" parent="."]
+
+[node name="SubViewport" type="SubViewport" parent="."]
+size = Vector2i(600, 500)
+
+[node name="VRMenu3D" type="Node3D" parent="."]
+visible = false
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="VRMenu3D"]
