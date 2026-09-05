@@ -80,9 +80,9 @@ func setup_audio_record_bus() -> void:
 		record_bus_index = AudioServer.get_bus_count() - 1
 		AudioServer.set_bus_name(record_bus_index, "Record")
 
-	# Important: Bus must NOT be muted for AudioEffectRecord to capture audio in Godot!
-	# We lower the volume to -80 dB to avoid output feedback through speakers.
+	# Unmute record bus so AudioEffectRecord receives audio
 	AudioServer.set_bus_mute(record_bus_index, false)
+	# Set volume to -80.0 dB to prevent audio feedback through speakers
 	AudioServer.set_bus_volume_db(record_bus_index, -80.0)
 
 	if AudioServer.get_bus_effect_count(record_bus_index) == 0:
@@ -173,19 +173,17 @@ func stop_ptt_recording_and_send() -> void:
 	is_recording = false
 	red_circle.visible = false
 	record_effect.set_recording_active(false)
-	if audio_stream_record.playing:
-		audio_stream_record.stop()
 	status_label.text = "Status: Processing Audio..."
 
 	var recording = record_effect.get_recording()
 	if recording:
 		recording.save_to_wav("user://temp_recording.wav")
 		var wav_bytes = FileAccess.get_file_as_bytes("user://temp_recording.wav")
-		if wav_bytes.size() > 0:
+		if wav_bytes.size() > 44: # Standard WAV header is 44 bytes
 			var base64_audio = Marshalls.raw_to_base64(wav_bytes)
 			send_audio_to_gemma(base64_audio)
 		else:
-			status_label.text = "Status: Error saving recording"
+			status_label.text = "Status: Error - recorded audio is empty"
 	else:
 		status_label.text = "Status: No audio recorded"
 
@@ -199,6 +197,9 @@ func send_audio_to_gemma(base64_audio: String) -> void:
 	var system_content = persona
 	if pseudo_memory.strip_edges() != "":
 		system_content += "\n\nPrevious Conversation Pseudo-Memory:\n" + pseudo_memory
+
+	# Format with both standard audio input structures for maximum compatibility with llama.cpp / Gemma multimodal servers
+	var data_uri = "data:audio/wav;base64," + base64_audio
 
 	var payload = {
 		"messages": [
@@ -217,8 +218,14 @@ func send_audio_to_gemma(base64_audio: String) -> void:
 						}
 					},
 					{
+						"type": "audio_url",
+						"audio_url": {
+							"url": data_uri
+						}
+					},
+					{
 						"type": "text",
-						"text": "Please reply to this audio voice command and also provide a concise summary of our interaction."
+						"text": "Listen to the provided voice command audio carefully and respond to it directly."
 					}
 				]
 			}
