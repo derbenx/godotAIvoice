@@ -23,6 +23,7 @@ default_bus_layout="res://default_bus_layout.tres"
 [xr]
 
 openxr/enabled=true
+shaders/enabled=true
 
 [input]
 
@@ -48,4 +49,7 @@ toggle_menu={
 [rendering]
 
 rendering_device/driver.windows="d3d12"
-renderer/rendering_method="mobile"
+rendering_device/driver.android="vulkan"
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+viewport/transparent_background=true

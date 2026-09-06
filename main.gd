@@ -253,13 +253,14 @@ func stop_ptt_recording_and_send() -> void:
 # Returns peak amplitude to detect silent / null audio
 func calculate_max_amplitude(raw_bytes: PackedByteArray) -> float:
 	var peak: float = 0.0
-	var sample_count = raw_bytes.size() / 2
-	for i in range(0, sample_count, 10): # Sample every 10th 16-bit PCM sample for speed
-		var byte_offset = i * 2
-		if byte_offset + 1 < raw_bytes.size():
-			var val = abs(raw_bytes.decode_s16(byte_offset))
-			if val > peak:
-				peak = val
+	var total_bytes = raw_bytes.size()
+	var step_bytes = 20 # Step by 20 bytes (10 16-bit samples) using float arithmetic to avoid integer division warning
+	var offset = 0
+	while offset + 1 < total_bytes:
+		var val = abs(raw_bytes.decode_s16(offset))
+		if val > peak:
+			peak = val
+		offset += step_bytes
 	return peak
 
 # Pure In-RAM Audio Processing: Downsamples AudioStreamWAV to 16kHz 16-bit Mono PCM RIFF WAV
