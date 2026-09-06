@@ -45,8 +45,17 @@ func _notification(what: int) -> void:
 	# Prevent B button / Back button on Android/Quest from closing the app
 	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
 		toggle_settings_menu()
+	elif what == NOTIFICATION_WM_CLOSE_REQUEST:
+		# Consume close request on Quest/Android so menu can be navigated
+		toggle_settings_menu()
 
 func _ready() -> void:
+	# Disable automatic app quitting on back/close event (Android/Quest B button)
+	get_tree().set_auto_accept_quit(false)
+
+	# Enable XR on viewport
+	get_viewport().use_xr = true
+
 	# Initialize OpenXR if available
 	var xr_interface = XRServer.find_interface("OpenXR")
 	if xr_interface:
@@ -54,12 +63,13 @@ func _ready() -> void:
 			xr_interface.initialize()
 		if xr_interface.is_initialized():
 			print("OpenXR initialized successfully. Enabling VR mode.")
-			get_viewport().use_xr = true
 			is_vr_mode = true
 		else:
 			print("OpenXR interface present but failed to initialize. PC mode.")
+			get_viewport().use_xr = false
 	else:
 		print("OpenXR interface not found. Falling back to PC mode.")
+		get_viewport().use_xr = false
 
 	# Setup Audio Recording Bus
 	setup_audio_record_bus()
