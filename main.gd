@@ -43,7 +43,7 @@ var turn_count: int = 0
 
 func _notification(what: int) -> void:
 	# Prevent B button / Back button on Android/Quest from closing the app
-	if what == NOTIFICATION_WM_GO_BACK_REQUEST or what == NOTIFICATION_WM_BACK_NAVIGATION:
+	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
 		toggle_settings_menu()
 
 func _ready() -> void:
@@ -292,12 +292,13 @@ func create_compact_16khz_wav_in_ram(sample: AudioStreamWAV) -> PackedByteArray:
 
 	var pcm_16_mono = PackedByteArray()
 
-	var num_samples = raw_data.size() / (4 if is_stereo else 2)
+	var bytes_per_sample = 4.0 if is_stereo else 2.0
+	var num_samples = int(float(raw_data.size()) / bytes_per_sample)
 	var i: float = 0.0
 
 	while i < num_samples:
 		var idx = int(i)
-		var byte_offset = idx * (4 if is_stereo else 2)
+		var byte_offset = int(float(idx) * bytes_per_sample)
 		if byte_offset + 1 < raw_data.size():
 			var sample_val = raw_data.decode_s16(byte_offset)
 			var offset_end = pcm_16_mono.size()
