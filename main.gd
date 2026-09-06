@@ -41,15 +41,25 @@ var turn_count: int = 0
 @onready var audio_stream_record: AudioStreamPlayer = $AudioStreamRecord
 @onready var vr_menu_3d: Node3D = $VRMenu3D
 
+func _notification(what: int) -> void:
+	# Prevent B button / Back button on Android/Quest from closing the app
+	if what == NOTIFICATION_WM_GO_BACK_REQUEST or what == NOTIFICATION_WM_BACK_NAVIGATION:
+		toggle_settings_menu()
+
 func _ready() -> void:
 	# Initialize OpenXR if available
 	var xr_interface = XRServer.find_interface("OpenXR")
-	if xr_interface and xr_interface.is_initialized():
-		print("OpenXR initialized successfully. Enabling VR mode.")
-		get_viewport().use_xr = true
-		is_vr_mode = true
+	if xr_interface:
+		if not xr_interface.is_initialized():
+			xr_interface.initialize()
+		if xr_interface.is_initialized():
+			print("OpenXR initialized successfully. Enabling VR mode.")
+			get_viewport().use_xr = true
+			is_vr_mode = true
+		else:
+			print("OpenXR interface present but failed to initialize. PC mode.")
 	else:
-		print("OpenXR not initialized. Falling back to PC mode.")
+		print("OpenXR interface not found. Falling back to PC mode.")
 
 	# Setup Audio Recording Bus
 	setup_audio_record_bus()
@@ -144,16 +154,19 @@ func setup_microphone_list() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	# Toggle Menu
 	if event.is_action_pressed("toggle_menu"):
-		menu_panel.visible = !menu_panel.visible
-		if menu_panel.visible:
-			ip_line_edit.grab_focus()
-			position_vr_menu_if_needed()
+		toggle_settings_menu()
 
 	# Push To Talk handling
 	if event.is_action_pressed("ptt"):
 		start_ptt_recording()
 	elif event.is_action_released("ptt"):
 		on_ptt_released()
+
+func toggle_settings_menu() -> void:
+	menu_panel.visible = !menu_panel.visible
+	if menu_panel.visible:
+		ip_line_edit.grab_focus()
+		position_vr_menu_if_needed()
 
 func _input(event: InputEvent) -> void:
 	# Check spacebar / PTT event if not handled or when UI controls have focus
@@ -254,7 +267,7 @@ func stop_ptt_recording_and_send() -> void:
 func calculate_max_amplitude(raw_bytes: PackedByteArray) -> float:
 	var peak: float = 0.0
 	var total_bytes = raw_bytes.size()
-	var step_bytes = 20 # Step by 20 bytes (10 16-bit samples) using float arithmetic to avoid integer division warning
+	var step_bytes = 20
 	var offset = 0
 	while offset + 1 < total_bytes:
 		var val = abs(raw_bytes.decode_s16(offset))
